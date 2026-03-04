@@ -30,6 +30,10 @@
    * 所有连接到该 Neo4j 数据库的 Agent 实例共享同一套资产图谱，实现多 Agent 协同作业时的情报互通。
 
 ---
+首次使用输出：<img width="1130" height="659" alt="512aecb285bac6aac4bffa231cb0053a" src="https://github.com/user-attachments/assets/df9b2666-fdd0-4bd1-b866-66fe0dc2d100" />
+二次针对同目标渗透测试输出:<img width="1125" height="1000" alt="d6ebbcd28881cca428d94314128fde48" src="https://github.com/user-attachments/assets/8159d575-ee5f-4d69-87f5-bb6130135daa" />
+Agent数据来源询问:<img width="1145" height="1145" alt="cdb0a981b9aba6a548f3864f35b25045" src="https://github.com/user-attachments/assets/c545c09b-a6af-49a4-aab2-af3467dbe2a2" />
+
 
 ## **三、环境安装指南**
 
