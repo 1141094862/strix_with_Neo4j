@@ -61,6 +61,7 @@ pyte = "^0.8.1"
 requests = "^2.32.0"
 libtmux = "^0.46.2"
 google-cloud-aiplatform = ">=1.38"
+neo4j = "^5.14.0"
 
 [tool.poetry.group.dev.dependencies]
 # Type checking and static analysis
@@ -130,6 +131,7 @@ module = [
     "pyte.*",
     "libtmux.*",
     "pytest.*",
+    "neo4j.*",
 ]
 ignore_missing_imports = true
 

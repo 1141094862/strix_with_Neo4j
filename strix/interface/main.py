@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent.parent / ".env")
+load_dotenv(Path(__file__).parent.parent.parent / ".env", override=True)
 
 import litellm
 from docker.errors import DockerException
@@ -35,7 +35,7 @@ from strix.interface.utils import (
     process_pull_line,
     validate_llm_response,
 )
-from strix.runtime.docker_runtime import STRIX_IMAGE
+from strix.runtime.docker_runtime import NEO4J_IMAGE, STRIX_IMAGE
 from strix.telemetry.tracer import get_global_tracer
 
 
@@ -420,30 +420,29 @@ def pull_docker_image() -> None:
     console = Console()
     client = check_docker_connection()
 
-    if image_exists(client, STRIX_IMAGE):
-        return
+    # === 拉取沙箱镜像 ===
+    if not image_exists(client, STRIX_IMAGE):
+        console.print()
+        console.print(f"[bold cyan]🐳 Pulling Docker image:[/] {STRIX_IMAGE}")
+        console.print("[dim yellow]This only happens on first run and may take a few minutes...[/]")
+        console.print()
 
-    console.print()
-    console.print(f"[bold cyan]🐳 Pulling Docker image:[/] {STRIX_IMAGE}")
-    console.print("[dim yellow]This only happens on first run and may take a few minutes...[/]")
-    console.print()
+        with console.status("[bold cyan]Downloading image layers...", spinner="dots") as status:
+            try:
+                layers_info: dict[str, str] = {}
+                last_update = ""
 
-    with console.status("[bold cyan]Downloading image layers...", spinner="dots") as status:
-        try:
-            layers_info: dict[str, str] = {}
-            last_update = ""
+                for line in client.api.pull(STRIX_IMAGE, stream=True, decode=True):
+                    last_update = process_pull_line(line, layers_info, status, last_update)
 
-            for line in client.api.pull(STRIX_IMAGE, stream=True, decode=True):
-                last_update = process_pull_line(line, layers_info, status, last_update)
-
-        except DockerException as e:
-            console.print()
-            error_text = Text()
-            error_text.append("❌ ", style="bold red")
-            error_text.append("FAILED TO PULL IMAGE", style="bold red")
-            error_text.append("\n\n", style="white")
-            error_text.append(f"Could not download: {STRIX_IMAGE}\n", style="white")
-            error_text.append(str(e), style="dim red")
+            except DockerException as e:
+                console.print()
+                error_text = Text()
+                error_text.append("❌ ", style="bold red")
+                error_text.append("FAILED TO PULL IMAGE", style="bold red")
+                error_text.append("\n\n", style="white")
+                error_text.append(f"Could not download: {STRIX_IMAGE}\n", style="white")
+                error_text.append(str(e), style="dim red")
 
             panel = Panel(
                 error_text,
@@ -455,11 +454,51 @@ def pull_docker_image() -> None:
             console.print(panel, "\n")
             sys.exit(1)
 
-    success_text = Text()
-    success_text.append("✅ ", style="bold green")
-    success_text.append("Successfully pulled Docker image", style="green")
-    console.print(success_text)
-    console.print()
+        success_text = Text()
+        success_text.append("✅ ", style="bold green")
+        success_text.append("Successfully pulled Docker image", style="green")
+        console.print(success_text)
+        console.print()
+
+    # === 拉取 Neo4j 镜像 ===
+    if not image_exists(client, NEO4J_IMAGE):
+        console.print()
+        console.print(f"[bold cyan]🐳 Pulling Neo4j image:[/] {NEO4J_IMAGE}")
+        console.print("[dim yellow]This is the agent memory database...[/]")
+        console.print()
+
+        with console.status("[bold cyan]Downloading Neo4j image layers...", spinner="dots") as status:
+            try:
+                layers_info: dict[str, str] = {}
+                last_update = ""
+
+                for line in client.api.pull(NEO4J_IMAGE, stream=True, decode=True):
+                    last_update = process_pull_line(line, layers_info, status, last_update)
+
+            except DockerException as e:
+                console.print()
+                error_text = Text()
+                error_text.append("❌ ", style="bold red")
+                error_text.append("FAILED TO PULL NEO4J IMAGE", style="bold red")
+                error_text.append("\n\n", style="white")
+                error_text.append(f"Could not download: {NEO4J_IMAGE}\n", style="white")
+                error_text.append(str(e), style="dim red")
+
+                panel = Panel(
+                    error_text,
+                    title="[bold red]🛡️  NEO4J PULL ERROR",
+                    title_align="center",
+                    border_style="red",
+                    padding=(1, 2),
+                )
+                console.print(panel, "\n")
+                sys.exit(1)
+
+        success_text = Text()
+        success_text.append("✅ ", style="bold green")
+        success_text.append("Successfully pulled Neo4j image", style="green")
+        console.print(success_text)
+        console.print()
 
 
 def main() -> None:

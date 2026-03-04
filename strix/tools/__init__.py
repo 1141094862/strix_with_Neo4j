@@ -29,6 +29,7 @@ if not SANDBOX_MODE:
     from .browser import *  # noqa: F403
     from .file_edit import *  # noqa: F403
     from .finish import *  # noqa: F403
+    from .memory import *  # noqa: F403
     from .notes import *  # noqa: F403
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403
@@ -41,6 +42,7 @@ if not SANDBOX_MODE:
 else:
     from .browser import *  # noqa: F403
     from .file_edit import *  # noqa: F403
+    from .memory import *  # noqa: F403
     from .notes import *  # noqa: F403
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403

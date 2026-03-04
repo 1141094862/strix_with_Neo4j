@@ -237,6 +237,10 @@ async def _execute_single_tool(
 
         _update_tracer_with_result(tracer, execution_id, is_error, result, error_payload)
 
+        # === [新增] 工具执行后自动存储发现 ===
+        if not is_error and tracer:
+            _auto_store_discovery(tool_name, args, result, tracer)
+
     except (ConnectionError, RuntimeError, ValueError, TypeError, OSError) as e:
         error_msg = str(e)
         if tracer and execution_id:
@@ -245,6 +249,164 @@ async def _execute_single_tool(
 
     observation_xml, images = _format_tool_result(tool_name, result)
     return observation_xml, images, should_agent_finish
+
+
+def _auto_store_discovery(
+    tool_name: str,
+    args: dict[str, Any],
+    result: Any,
+    tracer: Any,
+) -> None:
+    """工具执行后自动存储发现到 Neo4j"""
+    try:
+        from strix.memory.neo4j_client import Neo4jClient
+
+        neo4j = Neo4jClient.get_instance()
+        if not neo4j.is_connected():
+            return
+
+        # 获取 target_url
+        scan_config = getattr(tracer, "scan_config", None)
+        if not scan_config or not scan_config.get("targets"):
+            return
+
+        target_url = None
+        for target in scan_config.get("targets", []):
+            if target.get("type") == "web_application":
+                target_url = target.get("details", {}).get("target_url")
+            elif target.get("type") == "ip_address":
+                target_url = target.get("details", {}).get("target_ip")
+            if target_url:
+                break
+
+        if not target_url:
+            return
+
+        # 存储 Target
+        neo4j.store_target(target_url)
+
+        # 根据工具类型存储发现
+        if tool_name == "browser_action":
+            _store_browser_discovery(neo4j, args, result, target_url)
+        elif tool_name == "terminal_execute":
+            _store_terminal_discovery(neo4j, args, result, target_url)
+        elif tool_name == "python_action":
+            _store_python_discovery(neo4j, args, result, target_url)
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"Auto-store discovery failed: {e}")
+
+
+def _store_browser_discovery(
+    neo4j: Any,
+    args: dict[str, Any],
+    result: Any,
+    target_url: str,
+) -> None:
+    """存储浏览器工具发现的端点"""
+    if not isinstance(result, dict):
+        return
+
+    action = args.get("action")
+    url = args.get("url", "")
+
+    # 存储 URL 访问记录
+    if action in ("launch", "goto", "new_tab") and url:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        path = parsed.path or "/"
+
+        node_id = neo4j.store_finding(
+            "Endpoint",
+            {
+                "path": path,
+                "method": "GET",
+                "url": url,
+                "source": "browser",
+            },
+        )
+        if node_id:
+            neo4j.create_relationship(node_id, "Endpoint", target_url, "Target", "DISCOVERED_IN")
+            print(f"[Neo4j] ✅ Auto-stored Endpoint from browser: {path}")
+
+
+def _store_terminal_discovery(
+    neo4j: Any,
+    args: dict[str, Any],
+    result: Any,
+    target_url: str,
+) -> None:
+    """存储终端工具发现的子域名和服务"""
+    if not isinstance(result, dict):
+        return
+
+    command = args.get("command", "")
+    content = result.get("content", "") or str(result)
+
+    # 检测子域名枚举
+    if "subfinder" in command or "subdomain" in command.lower():
+        lines = content.split("\n")
+        for line in lines:
+            line = line.strip()
+            if line and "." in line and not line.startswith("#"):
+                node_id = neo4j.store_finding(
+                    "Subdomain",
+                    {"hostname": line, "source": "terminal"},
+                )
+                if node_id:
+                    neo4j.create_relationship(node_id, "Subdomain", target_url, "Target", "DISCOVERED_IN")
+        if lines:
+            print(f"[Neo4j] ✅ Auto-stored Subdomains from terminal")
+
+    # 检测端口扫描
+    if "nmap" in command or "naabu" in command:
+        import re
+        port_pattern = r"(\d+)/tcp\s+open"
+        ports = re.findall(port_pattern, content)
+        for port in ports:
+            node_id = neo4j.store_finding(
+                "Service",
+                {"port": int(port), "protocol": "tcp", "state": "open", "source": "terminal"},
+            )
+            if node_id:
+                neo4j.create_relationship(node_id, "Service", target_url, "Target", "DISCOVERED_IN")
+        if ports:
+            print(f"[Neo4j] ✅ Auto-stored Services from terminal: {len(ports)} ports")
+
+
+def _store_python_discovery(
+    neo4j: Any,
+    args: dict[str, Any],
+    result: Any,
+    target_url: str,
+) -> None:
+    """存储 Python 工具发现的凭证"""
+    if not isinstance(result, dict):
+        return
+
+    content = result.get("stdout", "") or result.get("result", "") or str(result)
+
+    # 检测凭证模式
+    import re
+    patterns = [
+        (r"password[\"']?\s*[:=]\s*[\"']([^\"']+)[\"']", "password"),
+        (r"token[\"']?\s*[:=]\s*[\"']([^\"']+)[\"']", "token"),
+        (r"api_key[\"']?\s*[:=]\s*[\"']([^\"']+)[\"']", "api_key"),
+        (r"secret[\"']?\s*[:=]\s*[\"']([^\"']+)[\"']", "secret"),
+    ]
+
+    for pattern, cred_type in patterns:
+        matches = re.findall(pattern, content, re.IGNORECASE)
+        for match in matches:
+            if len(match) > 3:  # 忽略太短的值
+                node_id = neo4j.store_finding(
+                    "Credential",
+                    {"type": cred_type, "value": match, "source": "python"},
+                )
+                if node_id:
+                    neo4j.create_relationship(node_id, "Credential", target_url, "Target", "DISCOVERED_IN")
+                print(f"[Neo4j] ✅ Auto-stored Credential from python: {cred_type}")
 
 
 def _get_tracer_and_agent_id(agent_state: Any | None) -> tuple[Any | None, str]:

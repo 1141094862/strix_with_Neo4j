@@ -145,6 +145,7 @@ class LLM:
         self.memory_compressor = MemoryCompressor(
             model_name=self.config.model_name,
             timeout=self.config.timeout,
+            target_url=self.config.target_url,
         )
 
         if agent_name:

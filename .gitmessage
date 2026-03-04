@@ -1,0 +1,6 @@
+Initial commit: Strix project with technical analysis docs
+
+- Initialize project structure
+- Add technical analysis docs to docs/ directory
+- Configure environment variables (.env file)
+- Add dotenv auto-loading to main.py

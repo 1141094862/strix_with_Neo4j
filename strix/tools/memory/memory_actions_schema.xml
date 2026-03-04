@@ -1,0 +1,30 @@
+<tools>
+<tool name="query_memory">
+<description>
+Query Neo4j graph memory for previously stored discoveries.
+
+Use this tool to check what has already been discovered about a target before
+starting new testing phases. This helps avoid redundant work and builds upon
+existing knowledge.
+
+Common use cases:
+- Check known endpoints before scanning: query="endpoints"
+- Review found vulnerabilities: query="vulnerabilities"
+- See all discoveries for a target: query="all"
+</description>
+<parameters>
+<parameter name="query" type="string" required="true">
+What to search for. Supported values:
+- "endpoints": Web endpoints and URLs discovered
+- "vulnerabilities": Security issues found
+- "subdomains": Discovered subdomains
+- "technologies": Technology stack information
+- "credentials": Found credentials and secrets
+- "all": All stored discoveries
+</parameter>
+<parameter name="target" type="string" required="false">
+Optional target URL to filter results. Use this to get discoveries for a specific target only.
+</parameter>
+</parameters>
+</tool>
+</tools>

@@ -11,35 +11,60 @@ logger = logging.getLogger(__name__)
 MAX_TOTAL_TOKENS = 100_000
 MIN_RECENT_MESSAGES = 15
 
-SUMMARY_PROMPT_TEMPLATE = """You are an agent performing context
-condensation for a security agent. Your job is to compress scan data while preserving
-ALL operationally critical information for continuing the security assessment.
+SUMMARY_PROMPT_TEMPLATE = """You are compressing conversation history for a security agent.
 
-CRITICAL ELEMENTS TO PRESERVE:
-- Discovered vulnerabilities and potential attack vectors
-- Scan results and tool outputs (compressed but maintaining key findings)
-- Access credentials, tokens, or authentication details found
-- System architecture insights and potential weak points
-- Progress made in the assessment
-- Failed attempts and dead ends (to avoid duplication)
-- Any decisions made about the testing approach
+=== NEO4J GRAPH MEMORY ===
+Technical findings are stored in Neo4j graph database.
+Your conversation may contain <neo4j_context> showing current known state.
+You can also query memory using query_memory tool.
 
-COMPRESSION GUIDELINES:
-- Preserve exact technical details (URLs, paths, parameters, payloads)
-- Summarize verbose tool outputs while keeping critical findings
-- Maintain version numbers, specific technologies identified
-- Keep exact error messages that might indicate vulnerabilities
-- Compress repetitive or similar findings into consolidated form
+=== COMPRESSION PRINCIPLE (SEMI-CONSTRAINED) ===
+You decide what to preserve based on operational needs.
 
-Remember: Another security agent will use this summary to continue the assessment.
-They must be able to pick up exactly where you left off without losing any
-operational advantage or context needed to find vulnerabilities.
+MUST preserve (for continuity):
+- Current phase and objective
+- Critical decisions made
+- Active sessions/credentials
+- Blocking issues
+
+SHOULD preserve (if relevant):
+- Attack strategy and reasoning
+- Failed approaches (to avoid repetition)
+- Key insights about target
+- Next planned steps
+
+DO NOT preserve (available in Neo4j):
+- Exact URLs, paths, parameters
+- Vulnerability details and payloads
+- Raw tool outputs
+- Technical specifications
+
+=== FORMAT (YOU DECIDE) ===
+Use any structure that best captures the operational context:
+- Can use XML tags, markdown, or plain text
+- Can add any fields you find relevant
+- Focus on WHAT the next agent needs to know
+
+Example structures (you can modify or create your own):
+<summary>
+<phase>scanning</phase>
+<objective>Test authentication</objective>
+<key_insights>...</key_insights>
+<decisions>...</decisions>
+<next_steps>...</next_steps>
+</summary>
+
+Or simply:
+Phase: scanning
+Goal: Test auth
+Key findings: [stored in Neo4j]
+Next: Try SQLi on login form
 
 CONVERSATION SEGMENT TO SUMMARIZE:
 {conversation}
 
-Provide a technically precise summary that preserves all operational security context while
-keeping the summary concise and to the point."""
+Provide a summary that helps the next agent continue effectively.
+Keep it concise but operationally useful."""
 
 
 def _count_tokens(text: str, model: str) -> int:
@@ -148,13 +173,83 @@ class MemoryCompressor:
         max_images: int = 3,
         model_name: str | None = None,
         timeout: int = 600,
+        target_url: str | None = None,
     ):
         self.max_images = max_images
         self.model_name = model_name or os.getenv("STRIX_LLM", "openai/gpt-5")
         self.timeout = timeout
+        self.target_url = target_url
 
         if not self.model_name:
             raise ValueError("STRIX_LLM environment variable must be set and not empty")
+
+    def _get_target_topology(self) -> str | None:
+        """从 Neo4j 读取目标拓扑信息（展示所有属性）"""
+        if not self.target_url:
+            return None
+
+        try:
+            from strix.memory.neo4j_client import Neo4jClient
+
+            neo4j = Neo4jClient.get_instance()
+            if not neo4j.is_connected():
+                logger.debug("Neo4j not connected, skipping topology retrieval")
+                return None
+
+            topology = neo4j.get_target_topology(self.target_url)
+            if not topology:
+                logger.debug(f"No topology data found for target: {self.target_url}")
+                return None
+
+            phase = self._determine_phase(topology)
+            
+            # 统计各类发现数量
+            total_items = sum(len(topology.get(k, [])) for k in ["endpoints", "vulnerabilities", "subdomains", "technologies", "credentials", "parameters", "findings"])
+            logger.info(f"✅ Retrieved topology from Neo4j for {self.target_url}: {total_items} items, phase={phase}")
+            print(f"[Neo4j] 📖 Retrieved graph memory for {self.target_url}: {total_items} items, phase={phase}")
+
+            lines = [
+                f"<neo4j_context target=\"{self.target_url}\" phase=\"{phase}\">",
+                "<!-- Graph Memory: All stored discoveries -->",
+            ]
+
+            # 展示所有属性（半约束：LLM 决定关注什么）
+            for key in ["endpoints", "vulnerabilities", "subdomains", "technologies", "credentials", "parameters", "findings"]:
+                items = topology.get(key, [])
+                if items:
+                    lines.append(f"  <{key}>")
+                    for item in items:
+                        # 展示所有属性
+                        props_str = " ".join([f'{k}="{v}"' for k, v in item.items() if v is not None])
+                        if props_str:
+                            lines.append(f"    <item {props_str}/>")
+                        else:
+                            lines.append(f"    <item/>")
+                    lines.append(f"  </{key}>")
+
+            lines.append("</neo4j_context>")
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.debug(f"Failed to get target topology from Neo4j: {e}")
+            return None
+
+    def _determine_phase(self, topology: dict[str, Any]) -> str:
+        """根据拓扑信息判断当前阶段"""
+        endpoints = topology.get("endpoints", [])
+        vulns = topology.get("vulnerabilities", [])
+        subdomains = topology.get("subdomains", [])
+        credentials = topology.get("credentials", [])
+
+        if credentials or (vulns and any(v.get("severity") in ["critical", "high"] for v in vulns)):
+            return "exploitation"
+        if vulns:
+            return "post-exploitation"
+        if len(endpoints) > 5:
+            return "scanning"
+        if subdomains or endpoints:
+            return "recon"
+        return "recon"
 
     def compress_history(
         self,
@@ -198,8 +293,17 @@ class MemoryCompressor:
             _get_message_tokens(msg, model_name) for msg in system_msgs + regular_msgs
         )
 
+        # === 始终注入 Neo4j 拓扑信息 ===
+        topology_context = self._get_target_topology()
+        if topology_context:
+            topology_msg = {
+                "role": "system",
+                "content": topology_context,
+            }
+            system_msgs.append(topology_msg)
+
         if total_tokens <= MAX_TOTAL_TOKENS * 0.9:
-            return messages
+            return system_msgs + regular_msgs
 
         compressed = []
         chunk_size = 10

@@ -57,6 +57,12 @@ class StrixAgent(BaseAgent):
             elif target_type == "ip_address":
                 ip_addresses.append(details["target_ip"])
 
+        # === [新增] 设置第一个目标 URL 到 LLMConfig ===
+        first_target_url = urls[0] if urls else (ip_addresses[0] if ip_addresses else None)
+        if first_target_url and self.llm_config:
+            self.llm_config.target_url = first_target_url
+            self.llm.memory_compressor.target_url = first_target_url
+
         task_parts = []
 
         if repositories:

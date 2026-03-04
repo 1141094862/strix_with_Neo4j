@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-
 _global_tracer: Optional["Tracer"] = None
 
 
@@ -92,6 +91,64 @@ class Tracer:
             self.vulnerability_found_callback(
                 report_id, title.strip(), content.strip(), severity.lower().strip()
             )
+
+        # === [新增] 存储到 Neo4j ===
+        try:
+            from strix.memory.neo4j_client import Neo4jClient
+            import re
+
+            neo4j = Neo4jClient.get_instance()
+            if neo4j.is_connected():
+                neo4j.store_vulnerability(
+                    vuln_id=report_id,
+                    vuln_type=title.strip(),
+                    severity=severity.lower().strip(),
+                    properties={
+                        "content": content.strip(),
+                        "timestamp": report["timestamp"],
+                    },
+                )
+                
+                # === [修改] 只关联到漏洞实际所属的 Target ===
+                # 从 content 中提取 URL
+                url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+                found_urls = re.findall(url_pattern, content)
+                
+                # 匹配 scan_config 中的 Target
+                matched_target = None
+                if self.scan_config and self.scan_config.get("targets"):
+                    for target in self.scan_config["targets"]:
+                        target_url = None
+                        if target.get("type") == "web_application":
+                            target_url = target.get("details", {}).get("target_url")
+                        elif target.get("type") == "ip_address":
+                            target_url = target.get("details", {}).get("target_ip")
+                        
+                        if target_url:
+                            # 检查漏洞内容是否包含该 Target
+                            for found_url in found_urls:
+                                if target_url in found_url or found_url.startswith(target_url):
+                                    matched_target = target_url
+                                    break
+                            if matched_target:
+                                break
+                    
+                    # 如果没有匹配到，使用第一个 Target
+                    if not matched_target and self.scan_config.get("targets"):
+                        first_target = self.scan_config["targets"][0]
+                        if first_target.get("type") == "web_application":
+                            matched_target = first_target.get("details", {}).get("target_url")
+                        elif first_target.get("type") == "ip_address":
+                            matched_target = first_target.get("details", {}).get("target_ip")
+                
+                # 只关联到匹配的 Target
+                if matched_target:
+                    neo4j.store_target(matched_target)
+                    neo4j.link_vulnerability_to_target(report_id, matched_target)
+                
+                logger.info(f"✅ Successfully stored vulnerability {report_id} to Neo4j graph memory")
+        except Exception as e:
+            logger.warning(f"Failed to store vulnerability to Neo4j: {e}")
 
         self.save_run_data()
         return report_id

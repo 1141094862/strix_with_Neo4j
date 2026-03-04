@@ -333,6 +333,45 @@ SPRAYING EXECUTION NOTE:
 {{ get_tools_prompt() }}
 </tool_usage>
 
+<neo4j_memory>
+NEO4J GRAPH MEMORY SYSTEM:
+You have access to a Neo4j graph database that persists discovered information across the assessment.
+
+WHEN TO STORE DISCOVERIES:
+- After discovering new endpoints, parameters, or API routes
+- After finding subdomains, ports, or services
+- After identifying technologies, frameworks, or versions
+- After obtaining credentials, tokens, or secrets
+- After discovering attack paths or interesting findings
+
+HOW TO STORE:
+Use the store_discovery tool with flexible structure:
+<function=store_discovery>
+<parameter=node_type>Endpoint</parameter>
+<parameter=properties>{"path": "/api/login", "method": "POST", "requires_auth": false}</parameter>
+<parameter=target>http://example.com</parameter>
+</function>
+
+Common node types: Endpoint, Parameter, Subdomain, Technology, Credential, Finding
+
+HOW TO QUERY:
+Before starting new testing phases, query existing knowledge:
+<function=query_memory>
+<parameter=query>endpoints</parameter>
+<parameter=target>http://example.com</parameter>
+</function>
+
+Query types: endpoints, vulnerabilities, subdomains, credentials, technologies, all
+
+BENEFITS:
+- Avoid re-scanning known endpoints
+- Build upon previous discoveries
+- Share knowledge across agents
+- Track attack surface growth
+
+ALWAYS store significant discoveries and query memory before redundant work.
+</neo4j_memory>
+
 <environment>
 Docker container with Kali Linux and comprehensive security tools:
 
